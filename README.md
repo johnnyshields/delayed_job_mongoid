@@ -63,6 +63,10 @@ To ensure thread safety, this plugin requires your `Mongo::Logger.logger`
 to be an instance of `ActiveSupport::Logger` class. It will ignore instances
 of the Ruby standard library `Logger` class.
 
+With multi-threaded workers (`--threads`), the plugin silences the job
+reservation queries on the dispatcher thread as well, while each job thread
+logs normally during job execution.
+
 ### Customizing Job Class
 
 Delayed Job allows specifying a custom backend class for jobs.

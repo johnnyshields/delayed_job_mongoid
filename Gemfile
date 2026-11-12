@@ -2,6 +2,14 @@ source 'https://rubygems.org'
 
 gem 'rake'
 
+# Multi-threaded delayed_job (Delayed::Dispatcher). Set DELAYED_JOB_PATH
+# to test against a local checkout instead.
+if ENV['DELAYED_JOB_PATH']
+  gem 'delayed_job', path: ENV['DELAYED_JOB_PATH']
+else
+  gem 'delayed_job', github: 'johnnyshields/delayed_job', branch: 'multi-threaded'
+end
+
 group :test do
   gem 'rspec', '>= 3'
   gem 'simplecov', '>= 1.2', require: false

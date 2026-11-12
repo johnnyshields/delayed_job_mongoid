@@ -55,6 +55,21 @@ describe Delayed::Plugins::MongoSilencer do
     end
   end
 
+  describe '.store_log_level' do
+    after { mongo_logger.local_level = nil }
+
+    # The dispatcher thread of a multi-threaded worker stores the level
+    # before every poll, after it was silenced by the previous one.
+    it 'stores the original level on an already silenced thread' do
+      original_level = mongo_logger.level
+      described_class.store_log_level
+      described_class.silence!
+      described_class.store_log_level
+      described_class.unsilence!
+      expect(mongo_logger.level).to eq original_level
+    end
+  end
+
   context 'when plugin is not set' do
     it do
       run_worker

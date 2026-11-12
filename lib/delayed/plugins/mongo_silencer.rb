@@ -5,9 +5,19 @@ module Delayed
   module Plugins
     # Silences the Mongo logger except when performing jobs.
     # Requires the Mongoid/Mongo loggers to be instances of ActiveSupport::Logger.
+    #
+    # The silenced level is thread-local, so it is applied on every thread
+    # that talks to the job collection: worker threads (:execute) and, with
+    # a multi-threaded delayed_job, the dispatcher thread that reserves jobs
+    # (:loop wraps each reservation poll).
     class MongoSilencer < Delayed::Plugin
       callbacks do |lifecycle|
         lifecycle.before(:execute) do |*_args|
+          store_log_level
+          silence!
+        end
+
+        lifecycle.before(:loop) do |*_args|
           store_log_level
           silence!
         end
@@ -24,8 +34,10 @@ module Delayed
       end
 
       class << self
+        # Stores the logger's own level, ignoring any thread-local level
+        # (e.g. one set by #silence! on this thread).
         def store_log_level
-          @mongo_log_level = Mongo::Logger.logger.level if mongo_logger?
+          @mongo_log_level = ::Logger.instance_method(:level).bind_call(Mongo::Logger.logger) if mongo_logger?
         end
 
         def silence!
