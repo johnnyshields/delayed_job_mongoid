@@ -34,6 +34,22 @@ module Delayed
             reset
             super
           end
+
+          # Deletes the job only while the named worker holds its lock.
+          def destroy_if_locked_by(worker_name) # rubocop:disable Naming/PredicateMethod
+            self.class.where(_id: id, locked_by: worker_name).delete.positive?
+          end
+
+          # Saves the job only while the named worker holds its lock.
+          def save_if_locked_by(worker_name)
+            run_callbacks(:save) do
+              changes = changed_attributes.keys.to_h { |field| [field, attributes[field]] }
+              changes['updated_at'] = self.updated_at = Time.now.utc
+              updated = self.class.where(_id: id, locked_by: worker_name).update_all('$set' => changes).modified_count
+              move_changes if updated.positive?
+              updated.positive?
+            end
+          end
         end
 
         module ClassMethods
@@ -52,6 +68,16 @@ module Delayed
               { '$set' => { locked_at: right_now, locked_by: worker.name } },
               { return_document: :after }
             )
+          end
+
+          # Lock heartbeats: delayed_job refreshes the locks of running jobs,
+          # and reserve takes over locks older than the expiry it is given.
+          def lock_heartbeats?
+            true
+          end
+
+          def touch_locks(worker_names)
+            where(:locked_by.in => worker_names).update_all('$set' => { locked_at: db_time_now }).modified_count
           end
 
           # The jobs locked by the named worker, so that delayed_job can

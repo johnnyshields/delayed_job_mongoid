@@ -2,6 +2,35 @@ require 'spec_helper'
 
 describe Delayed::Backend::Mongoid::Job do
   it_behaves_like 'a delayed_job backend'
+  it_behaves_like 'a delayed_job backend supporting lock heartbeats'
+
+  describe '#save_if_locked_by' do
+    it 'writes only the changed fields' do
+      job = Delayed::Job.create!(payload_object: SimpleJob.new, locked_by: 'w1', locked_at: Delayed::Job.db_time_now)
+      Delayed::Job.where(_id: job.id).update_all('$set' => { queue: 'changed elsewhere' })
+      job.attempts = 2
+      expect(job.save_if_locked_by('w1')).to be true
+      saved = Delayed::Job.find(job.id)
+      expect([saved.attempts, saved.queue]).to eq [2, 'changed elsewhere']
+      expect(job.changed?).to be false
+    end
+
+    it 'updates updated_at' do
+      job = Delayed::Job.create!(payload_object: SimpleJob.new, locked_by: 'w1', locked_at: Delayed::Job.db_time_now)
+      before = Delayed::Job.find(job.id).updated_at
+      sleep 0.01
+      job.attempts = 1
+      job.save_if_locked_by('w1')
+      expect(Delayed::Job.find(job.id).updated_at).to be > before
+    end
+
+    it 'runs the save callbacks, which set the default run_at' do
+      job = Delayed::Job.create!(payload_object: SimpleJob.new, locked_by: 'w1', locked_at: Delayed::Job.db_time_now)
+      job.run_at = nil
+      job.save_if_locked_by('w1')
+      expect(Delayed::Job.find(job.id).run_at).not_to be_nil
+    end
+  end
 
   context 'when job contains two instance variables that reference the same Mongoid document' do
     it 'can serialize and deserialize the job' do
