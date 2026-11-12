@@ -29,6 +29,34 @@ describe Delayed::Backend::Mongoid::Job do
     end
   end
 
+  describe '.locked_jobs' do
+    it 'returns only the jobs locked by the given worker' do
+      now = Delayed::Job.db_time_now
+      mine = Delayed::Job.create!(payload_object: SimpleJob.new, locked_by: 'dj.1 pid:7 thread:0', locked_at: now)
+      Delayed::Job.create!(payload_object: SimpleJob.new, locked_by: 'dj.1 pid:7 thread:1', locked_at: now)
+      Delayed::Job.create!(payload_object: SimpleJob.new)
+      expect(Delayed::Job.locked_jobs('dj.1 pid:7 thread:0').map(&:id)).to eq [mine.id]
+    end
+  end
+
+  describe 'recovering the jobs of a dead worker process' do
+    let(:status) { instance_double(Process::Status, signaled?: true, termsig: 9) }
+    let(:error) { Delayed::ProcessExitError.new('dj.1', 7, status) }
+
+    it 'counts each as a failed attempt and unlocks it' do
+      job = Delayed::Job.create!(payload_object: SimpleJob.new, locked_by: 'dj.1 pid:7 thread:0',
+                                 locked_at: Delayed::Job.db_time_now)
+      expect(Delayed::Worker.recover_jobs_of(['dj.1 pid:7 thread:0', 'dj.1 pid:7 thread:1'], error)).to eq 1
+
+      job.reload
+      expect(job.attempts).to eq 1
+      expect(job.locked_by).to be_nil
+      expect(job.locked_at).to be_nil
+      expect(job.last_error).to start_with 'Worker process dj.1 (pid 7) was killed by signal 9'
+      expect(job.run_at).to be > Delayed::Job.db_time_now
+    end
+  end
+
   describe '.before_fork' do
     it 'disconnects Mongoid' do
       expect(Mongoid).to receive(:disconnect_clients)

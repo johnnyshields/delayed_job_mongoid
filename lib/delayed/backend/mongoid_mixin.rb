@@ -54,6 +54,12 @@ module Delayed
             )
           end
 
+          # The jobs locked by the named worker, so that delayed_job can
+          # recover them when the worker's process dies.
+          def locked_jobs(worker_name)
+            where(locked_by: worker_name).to_a
+          end
+
           # When a worker is exiting, make sure we don't have any locked jobs.
           def clear_locks!(worker_name)
             where(locked_by: worker_name).update_all(locked_at: nil, locked_by: nil)
