@@ -231,6 +231,22 @@ describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
     expect(elapsed).to be < 5
   end
 
+  it 'runs every job exactly once across two dispatchers with dynamic prefetch' do
+    Delayed::Worker.prefetch = 2
+    Delayed::Worker.prefetch_dynamic = true
+    ConcurrencyJob.reset
+    60.times { |i| Delayed::Job.enqueue(ConcurrencyJob.new(i)) }
+    Delayed::Worker.exit_on_complete = true
+    dispatchers = Array.new(2) do |i|
+      Delayed::Dispatcher.new(threads: 4, sleep_delay: 5).tap { |d| d.name_prefix = "dj.#{i} " }
+    end
+    Timeout.timeout(30) { dispatchers.map { |d| Thread.new { d.run } }.each(&:join) }
+
+    expect(ConcurrencyJob.runs.keys.sort).to eq((0...60).to_a)
+    expect(ConcurrencyJob.runs.values).to all(eq 1)
+    expect(Delayed::Job.count).to eq 0
+  end
+
   it 'locks a job per worker in 2 round trips' do
     enqueue(6)
     reserved = nil
