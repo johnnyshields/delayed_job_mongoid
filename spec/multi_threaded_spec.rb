@@ -108,7 +108,7 @@ describe 'multi-threaded delayed_job with Mongoid' do
       Timeout.timeout(30) { dispatcher.run }
 
       expect(Delayed::Job.count).to be_between(1, 7)
-      expect(Delayed::Job.where(:locked_by.ne => nil).count).to eq 0
+      expect(Delayed::Job.ne(locked_by: nil).count).to eq 0
     end
   end
 end

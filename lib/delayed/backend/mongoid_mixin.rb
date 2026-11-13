@@ -96,14 +96,16 @@ module Delayed
             return [] if candidates.empty?
 
             claims = candidates.zip(workers).map do |id, worker|
-              { update_one: {
-                filter: batch_reservation_selector(names, right_now, max_run_time).merge('_id' => id),
-                update: { '$set' => { 'locked_at' => right_now, 'locked_by' => worker.name } }
-              } }
+              {
+                update_one: {
+                  filter: batch_reservation_selector(names, right_now, max_run_time).merge('_id' => id),
+                  update: { '$set' => { 'locked_at' => right_now, 'locked_by' => worker.name } }
+                }
+              }
             end
             collection.bulk_write(claims, ordered: false)
 
-            won = where(:_id.in => candidates, :locked_by.in => names).index_by(&:locked_by)
+            won = any_in(_id: candidates).any_in(locked_by: names).index_by(&:locked_by)
             workers.filter_map { |worker| (job = won[worker.name]) && [worker, job] }
           end
 
@@ -121,7 +123,7 @@ module Delayed
           end
 
           def touch_locks(worker_names)
-            where(:locked_by.in => worker_names).update_all('$set' => { locked_at: db_time_now }).modified_count
+            any_in(locked_by: worker_names).update_all('$set' => { locked_at: db_time_now }).modified_count
           end
 
           # With Delayed::Worker.silence_polling, silences the Mongo driver's
