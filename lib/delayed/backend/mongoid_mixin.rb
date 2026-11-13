@@ -80,6 +80,16 @@ module Delayed
             where(:locked_by.in => worker_names).update_all('$set' => { locked_at: db_time_now }).modified_count
           end
 
+          # With Delayed::Worker.silence_polling, silences the Mongo driver's
+          # logger below WARN on the polling thread. Needs an
+          # ActiveSupport::Logger (thread-local levels); other loggers log.
+          def silence_polling(&)
+            logger = ::Mongo::Logger.logger
+            return yield unless logger.respond_to?(:silence)
+
+            logger.silence(::Logger::WARN, &)
+          end
+
           # The jobs locked by the named worker, so that delayed_job can
           # recover them when the worker's process dies.
           def locked_jobs(worker_name)

@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/2.0.0/),
 - `MongoSilencer` plugin to silence Delayed Job polling. ([#89], [@johnnyshields])
 - Support for Mongoid 8 and 9.
 - Support for Ruby 3.4 and 4.0.
+- `Delayed::Job.silence_polling` silences the Mongo driver logger for `Delayed::Worker.silence_polling`.
 - Support for multi-threaded delayed_job workers (`Delayed::Dispatcher`): specs cover `reserve_batch` and concurrent reservation against MongoDB.
 
 ### Changed

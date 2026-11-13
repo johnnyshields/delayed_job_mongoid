@@ -67,6 +67,15 @@ With multi-threaded workers (`--threads`), the plugin silences the job
 reservation queries on the dispatcher thread as well, while each job thread
 logs normally during job execution.
 
+With a delayed_job that has `Delayed::Worker.silence_polling`, you can use it
+instead of the plugin: it silences only the polling queries (reservations and
+lock refreshes) on the polling thread, leaving job execution and the queries
+that finish jobs logged. The same `ActiveSupport::Logger` requirement applies.
+
+```ruby
+Delayed::Worker.silence_polling = true # or --silence-polling / SILENCE_POLLING=1
+```
+
 ### Customizing Job Class
 
 Delayed Job allows specifying a custom backend class for jobs.
