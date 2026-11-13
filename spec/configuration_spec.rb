@@ -53,12 +53,22 @@ describe Delayed::Backend::Mongoid::Configuration do
       expect(Delayed::Backend::Mongoid::Job).not_to respond_to(:batch_reserve=)
     end
 
-    it 'is what the job class reserves by' do
-      allow(Delayed::Backend::Mongoid::Job).to receive(:sorted_updates?).and_return(false)
-      backend.batch_reserve = true
-      expect(Delayed::Backend::Mongoid::Job.partial_batch_may_leave_jobs?).to be true
-      backend.batch_reserve = false
-      expect(Delayed::Backend::Mongoid::Job.partial_batch_may_leave_jobs?).to be false
+    describe 'is what the job class reserves by' do
+      let(:workers) { Array.new(2) { |i| Delayed::Worker.new.tap { |w| w.thread_index = i } } }
+
+      before { Delayed::Job.enqueue(SimpleJob.new) }
+
+      it 'batching when on' do
+        backend.batch_reserve = true
+        expect(Delayed::Backend::Mongoid::Job).not_to receive(:reserve)
+        Delayed::Backend::Mongoid::Job.reserve_batch(workers)
+      end
+
+      it 'reserving per worker when off' do
+        backend.batch_reserve = false
+        expect(Delayed::Backend::Mongoid::Job).to receive(:reserve).twice.and_call_original
+        Delayed::Backend::Mongoid::Job.reserve_batch(workers)
+      end
     end
   end
 end
