@@ -1,27 +1,21 @@
 require 'spec_helper'
 
-# Counts the commands sent to MongoDB, by name.
-class CommandCounter
-  attr_reader :commands
-
-  def initialize
-    @commands = []
-    @mutex = Mutex.new
-  end
-
-  def started(event)
-    @mutex.synchronize { @commands << event.command_name }
-  end
-
-  def succeeded(_event); end
-
-  def failed(_event); end
-end
-
 describe 'Delayed::Backend::Mongoid::Job.batch_reserve' do
+  # Records the names of the commands sent to MongoDB (a command monitoring
+  # subscriber). Scoped to this spec, not defined at the top level.
+  command_counter = Struct.new(:commands, :mutex) do
+    def started(event)
+      mutex.synchronize { commands << event.command_name }
+    end
+
+    def succeeded(_event); end
+
+    def failed(_event); end
+  end
+
   let(:job_class) { Delayed::Backend::Mongoid::Job }
   let(:workers) { Array.new(4) { |i| Delayed::Worker.new.tap { |w| w.thread_index = i } } }
-  let(:counter) { CommandCounter.new }
+  let(:counter) { command_counter.new([], Mutex.new) }
 
   around do |example|
     job_class.batch_reserve = true
@@ -48,6 +42,38 @@ describe 'Delayed::Backend::Mongoid::Job.batch_reserve' do
     counter.commands
   ensure
     client.send(:monitoring).subscribers[Mongo::Monitoring::COMMAND].delete(counter)
+  end
+
+  describe 'the command counter' do
+    it 'is not defined at the top level' do
+      expect(Object.const_defined?(:CommandCounter)).to be false
+    end
+
+    it 'records the commands sent while counting, in order' do
+      enqueue(1)
+      commands = commands_of do
+        job_class.collection.find.to_a
+        job_class.collection.insert_one(x: 1)
+      end
+      expect(commands).to eq %w[find insert]
+    end
+
+    it 'stops counting once done' do
+      commands_of { job_class.collection.find.to_a }
+      job_class.collection.find.to_a
+      expect(counter.commands).to eq %w[find]
+      expect(Mongoid.default_client.send(:monitoring).subscribers[Mongo::Monitoring::COMMAND]).not_to include counter
+    end
+
+    it 'stops counting when the block raises' do
+      expect { commands_of { raise IOError } }.to raise_error(IOError)
+      expect(Mongoid.default_client.send(:monitoring).subscribers[Mongo::Monitoring::COMMAND]).not_to include counter
+    end
+
+    it 'counts commands sent from several threads' do
+      commands = commands_of { Array.new(4) { Thread.new { job_class.collection.find.to_a } }.each(&:join) }
+      expect(commands).to eq %w[find] * 4
+    end
   end
 
   it 'is off by default, with a threshold of 4' do
