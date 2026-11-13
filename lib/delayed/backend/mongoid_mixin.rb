@@ -111,6 +111,13 @@ module Delayed
             workers.filter_map { |worker| (job = won[worker.name]) && [worker, job] }
           end
 
+          # With batch_reserve, a batch may come back short while jobs are
+          # left (candidates lost to other processes), so delayed_job polls
+          # again at once after one.
+          def partial_batch_may_leave_jobs?
+            batch_reserve ? true : false
+          end
+
           # Lock heartbeats: delayed_job refreshes the locks of running jobs,
           # and reserve takes over locks older than the expiry it is given.
           def lock_heartbeats?

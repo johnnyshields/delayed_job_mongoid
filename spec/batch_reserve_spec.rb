@@ -76,6 +76,17 @@ describe 'Delayed::Backend::Mongoid::Job.batch_reserve' do
     end
   end
 
+  describe '.partial_batch_may_leave_jobs?' do
+    it 'is true with batch_reserve, as candidates may be lost to other processes' do
+      expect(job_class.partial_batch_may_leave_jobs?).to be true
+    end
+
+    it 'is false without, as reserve stops only when no job is left' do
+      job_class.batch_reserve = false
+      expect(job_class.partial_batch_may_leave_jobs?).to be false
+    end
+  end
+
   it 'is off by default, with a threshold of 4' do
     job_class.batch_reserve = false
     expect([job_class.batch_reserve, job_class.batch_reserve_threshold]).to eq [false, 4]
