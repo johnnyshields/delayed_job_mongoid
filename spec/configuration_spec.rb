@@ -34,6 +34,14 @@ describe Delayed::Backend::Mongoid::Configuration do
       expect(backend.configuration.batch_reserve).to be true
     end
 
+    it 'exists from the start, so threads reading it at once share it' do
+      expect(backend).not_to respond_to(:configuration=)
+      expect(backend.method(:configuration).source_location.first).to end_with 'mongoid_configuration.rb'
+      expect(backend.configuration).to be_a described_class
+      configs = Array.new(8) { Thread.new { backend.configuration } }.map(&:value)
+      expect(configs.uniq.size).to eq 1
+    end
+
     it 'restores the default with reset_configuration!' do
       backend.configure { |config| config.batch_reserve = true }
       backend.reset_configuration!

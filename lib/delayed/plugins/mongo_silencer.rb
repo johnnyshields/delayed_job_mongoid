@@ -34,18 +34,24 @@ module Delayed
       end
 
       class << self
-        # Stores the logger's own level, ignoring any thread-local level
-        # (e.g. one set by #silence! on this thread).
+        # Stores, for this thread, the logger's own level, ignoring any
+        # thread-local level (e.g. one set by #silence! on this thread). Kept
+        # per thread like the level it restores: worker threads call it
+        # concurrently.
         def store_log_level
-          @mongo_log_level = ::Logger.instance_method(:level).bind_call(Mongo::Logger.logger) if mongo_logger?
+          Thread.current[:delayed_mongo_log_level] = ::Logger.instance_method(:level).bind_call(Mongo::Logger.logger) if mongo_logger?
         end
 
         def silence!
-          Mongo::Logger.logger.local_level = Logger::WARN if @mongo_log_level && mongo_logger?
+          Mongo::Logger.logger.local_level = Logger::WARN if stored_log_level && mongo_logger?
         end
 
         def unsilence!
-          Mongo::Logger.logger.local_level = @mongo_log_level if @mongo_log_level && mongo_logger?
+          Mongo::Logger.logger.local_level = stored_log_level if stored_log_level && mongo_logger?
+        end
+
+        def stored_log_level
+          Thread.current[:delayed_mongo_log_level]
         end
 
         private

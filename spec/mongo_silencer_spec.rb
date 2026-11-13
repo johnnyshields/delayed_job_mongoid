@@ -68,6 +68,23 @@ describe Delayed::Plugins::MongoSilencer do
       described_class.unsilence!
       expect(mongo_logger.level).to eq original_level
     end
+
+    it 'keeps the stored level per thread' do
+      original_level = mongo_logger.level
+      described_class.store_log_level
+      other = Thread.new { Thread.current[:delayed_mongo_log_level] }.value
+      expect(other).to be_nil
+      expect(described_class.stored_log_level).to eq original_level
+    end
+
+    it 'leaves another thread, which stored nothing, unsilenced' do
+      described_class.store_log_level
+      level = Thread.new do
+        described_class.silence!
+        mongo_logger.local_level
+      end.value
+      expect(level).to be_nil
+    end
   end
 
   context 'when plugin is not set' do

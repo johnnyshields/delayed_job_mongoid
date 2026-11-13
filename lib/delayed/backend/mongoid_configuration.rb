@@ -30,9 +30,9 @@ module Delayed
 
         def_delegators :configuration, :batch_reserve, :batch_reserve=
 
-        def configuration
-          @configuration ||= Configuration.new
-        end
+        # Created when this file loads, not on first use: worker threads
+        # read it concurrently, and a lazy `||=` could create two.
+        attr_reader :configuration
 
         # Yields the configuration; returns it.
         def configure
@@ -45,6 +45,8 @@ module Delayed
           @configuration = Configuration.new
         end
       end
+
+      reset_configuration!
     end
   end
 end
