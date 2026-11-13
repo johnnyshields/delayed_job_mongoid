@@ -88,8 +88,7 @@ batch.
 ```ruby
 # in config/initializers/delayed_job.rb
 Delayed::Backend::Mongoid.configure do |config|
-  config.batch_reserve = true
-  config.batch_reserve_threshold = 4 # default: fewer idle threads reserve one by one
+  config.batch_reserve = true # batches whenever two or more threads are idle
 end
 # or: Delayed::Backend::Mongoid.batch_reserve = true
 ```

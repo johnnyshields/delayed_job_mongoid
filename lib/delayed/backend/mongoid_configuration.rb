@@ -11,33 +11,24 @@ module Delayed
       #
       # or directly, e.g. Delayed::Backend::Mongoid.batch_reserve = true.
       class Configuration
-        # Batched reservation (off by default): when at least
-        # batch_reserve_threshold threads are idle, Job.reserve_batch
-        # reserves their jobs in 3 round trips instead of one
-        # find_one_and_update per thread.
-        attr_reader :batch_reserve, :batch_reserve_threshold
+        # Batched reservation (off by default): when several threads are
+        # idle, Job.reserve_batch reserves their jobs in 3 round trips
+        # instead of one find_one_and_update per thread.
+        attr_reader :batch_reserve
 
         def initialize
           @batch_reserve = false
-          @batch_reserve_threshold = 4
         end
 
         def batch_reserve=(value)
           @batch_reserve = value ? true : false
-        end
-
-        def batch_reserve_threshold=(value)
-          raise ArgumentError, "batch_reserve_threshold must be an Integer of 1 or more, got #{value.inspect}" unless value.is_a?(Integer) && value >= 1
-
-          @batch_reserve_threshold = value
         end
       end
 
       class << self
         extend Forwardable
 
-        def_delegators :configuration, :batch_reserve, :batch_reserve=,
-                       :batch_reserve_threshold, :batch_reserve_threshold=
+        def_delegators :configuration, :batch_reserve, :batch_reserve=
 
         def configuration
           @configuration ||= Configuration.new

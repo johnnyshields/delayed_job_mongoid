@@ -86,9 +86,9 @@ describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
     end
   end
 
-  it 'is off by default, with a threshold of 4' do
+  it 'is off by default' do
     Delayed::Backend::Mongoid.batch_reserve = false
-    expect([Delayed::Backend::Mongoid.batch_reserve, Delayed::Backend::Mongoid.batch_reserve_threshold]).to eq [false, 4]
+    expect(Delayed::Backend::Mongoid.batch_reserve).to be false
   end
 
   it 'locks a distinct job under each worker name, in 3 round trips' do
@@ -192,17 +192,21 @@ describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
     expect(job_class.find(jobs[1].id).locked_by).to eq 'other process'
   end
 
-  it 'reserves one job per worker below the threshold' do
-    enqueue(3)
-    expect(job_class).to receive(:reserve).exactly(3).times.and_call_original
-    expect(job_class.reserve_batch(workers.first(3)).size).to eq 3
-  end
-
-  it 'uses a configurable threshold' do
-    Delayed::Backend::Mongoid.batch_reserve_threshold = 2
+  it 'batches as soon as two workers are idle' do
     enqueue(2)
     expect(job_class).not_to receive(:reserve)
-    expect(job_class.reserve_batch(workers.first(2)).size).to eq 2
+    reserved = nil
+    commands = commands_of { reserved = job_class.reserve_batch(workers.first(2)) }
+    expect(commands).to eq %w[find update find]
+    expect(reserved.size).to eq 2
+  end
+
+  it 'reserves for a single idle worker in one round trip' do
+    enqueue(2)
+    reserved = nil
+    commands = commands_of { reserved = job_class.reserve_batch(workers.first(1)) }
+    expect(commands).to eq %w[findAndModify]
+    expect(reserved.map(&:first)).to eq workers.first(1)
   end
 
   it 'reserves one job per worker when off' do

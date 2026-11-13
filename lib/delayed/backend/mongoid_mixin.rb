@@ -73,8 +73,8 @@ module Delayed
 
           # Reserves a job for each of the given (idle) workers, or as many as
           # are available; returns [[worker, job], ...]. With batch_reserve
-          # and at least batch_reserve_threshold workers (see
-          # Delayed::Backend::Mongoid::Configuration), takes 3 round trips
+          # (see Delayed::Backend::Mongoid::Configuration) and more than one
+          # worker, takes 3 round trips
           # however many workers there are:
           #
           # 1. find up to one candidate per worker, as reserve would;
@@ -87,8 +87,8 @@ module Delayed
           # jobs than workers are returned, and delayed_job polls again at
           # once. Otherwise, one find_one_and_update per worker (see reserve).
           def reserve_batch(workers, max_run_time = Worker.max_run_time)
-            config = Delayed::Backend::Mongoid.configuration
-            return super unless config.batch_reserve && workers.size >= config.batch_reserve_threshold
+            # A single worker takes one find_one_and_update (see reserve).
+            return super unless Delayed::Backend::Mongoid.batch_reserve && workers.size > 1
 
             right_now = db_time_now
             names = workers.map(&:name)
