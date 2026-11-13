@@ -81,7 +81,7 @@ describe Delayed::Backend::Mongoid::Job do
       expect(job.attempts).to eq 1
       expect(job.locked_by).to be_nil
       expect(job.locked_at).to be_nil
-      expect(job.last_error).to start_with 'Worker process dj.1 (pid 7) was killed by signal 9'
+      expect(job.last_error).to start_with 'Child process dj.1 (pid 7) was killed by signal 9'
       expect(job.run_at).to be > Delayed::Job.db_time_now
     end
   end
