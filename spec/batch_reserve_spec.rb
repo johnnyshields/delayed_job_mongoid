@@ -1,6 +1,6 @@
 require 'spec_helper'
 
-describe 'Delayed::Backend::Mongoid::Job.batch_reserve' do
+describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
   # Records the names of the commands sent to MongoDB (a command monitoring
   # subscriber). Scoped to this spec, not defined at the top level.
   command_counter = Struct.new(:commands, :mutex) do
@@ -18,11 +18,10 @@ describe 'Delayed::Backend::Mongoid::Job.batch_reserve' do
   let(:counter) { command_counter.new([], Mutex.new) }
 
   around do |example|
-    job_class.batch_reserve = true
+    Delayed::Backend::Mongoid.batch_reserve = true
     example.run
   ensure
-    job_class.batch_reserve = false
-    job_class.batch_reserve_threshold = 4
+    Delayed::Backend::Mongoid.reset_configuration!
     Delayed::Worker.reset
     # Not reset by Worker.reset:
     Delayed::Worker.exit_on_complete = false
@@ -82,14 +81,14 @@ describe 'Delayed::Backend::Mongoid::Job.batch_reserve' do
     end
 
     it 'is false without, as reserve stops only when no job is left' do
-      job_class.batch_reserve = false
+      Delayed::Backend::Mongoid.batch_reserve = false
       expect(job_class.partial_batch_may_leave_jobs?).to be false
     end
   end
 
   it 'is off by default, with a threshold of 4' do
-    job_class.batch_reserve = false
-    expect([job_class.batch_reserve, job_class.batch_reserve_threshold]).to eq [false, 4]
+    Delayed::Backend::Mongoid.batch_reserve = false
+    expect([Delayed::Backend::Mongoid.batch_reserve, Delayed::Backend::Mongoid.batch_reserve_threshold]).to eq [false, 4]
   end
 
   it 'locks a distinct job under each worker name, in 3 round trips' do
@@ -200,14 +199,14 @@ describe 'Delayed::Backend::Mongoid::Job.batch_reserve' do
   end
 
   it 'uses a configurable threshold' do
-    job_class.batch_reserve_threshold = 2
+    Delayed::Backend::Mongoid.batch_reserve_threshold = 2
     enqueue(2)
     expect(job_class).not_to receive(:reserve)
     expect(job_class.reserve_batch(workers.first(2)).size).to eq 2
   end
 
   it 'reserves one job per worker when off' do
-    job_class.batch_reserve = false
+    Delayed::Backend::Mongoid.batch_reserve = false
     enqueue(4)
     reserved = nil
     commands = commands_of { reserved = job_class.reserve_batch(workers) }

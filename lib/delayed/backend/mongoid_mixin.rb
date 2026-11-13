@@ -1,6 +1,7 @@
 require 'active_support/concern'
 require 'delayed_job'
 require 'mongoid'
+require 'delayed/backend/mongoid_configuration'
 
 module Delayed
   module Backend
@@ -29,13 +30,6 @@ module Delayed
           index failed_at: 1, queue: 1, locked_by: -1, priority: 1, run_at: 1
 
           before_save :set_default_run_at
-
-          # Batched reservation (off by default): when at least
-          # batch_reserve_threshold threads are idle, reserve_batch reserves
-          # their jobs in 3 round trips instead of one find_one_and_update
-          # per thread. See .reserve_batch.
-          class_attribute :batch_reserve, instance_accessor: false, instance_predicate: false, default: false
-          class_attribute :batch_reserve_threshold, instance_accessor: false, instance_predicate: false, default: 4
 
           def reload(*args)
             reset
@@ -79,7 +73,8 @@ module Delayed
 
           # Reserves a job for each of the given (idle) workers, or as many as
           # are available; returns [[worker, job], ...]. With batch_reserve
-          # and at least batch_reserve_threshold workers, takes 3 round trips
+          # and at least batch_reserve_threshold workers (see
+          # Delayed::Backend::Mongoid::Configuration), takes 3 round trips
           # however many workers there are:
           #
           # 1. find up to one candidate per worker, as reserve would;
@@ -92,7 +87,8 @@ module Delayed
           # jobs than workers are returned, and delayed_job polls again at
           # once. Otherwise, one find_one_and_update per worker (see reserve).
           def reserve_batch(workers, max_run_time = Worker.max_run_time)
-            return super unless batch_reserve && workers.size >= batch_reserve_threshold.to_i
+            config = Delayed::Backend::Mongoid.configuration
+            return super unless config.batch_reserve && workers.size >= config.batch_reserve_threshold
 
             right_now = db_time_now
             names = workers.map(&:name)
@@ -115,7 +111,7 @@ module Delayed
           # left (candidates lost to other processes), so delayed_job polls
           # again at once after one.
           def partial_batch_may_leave_jobs?
-            batch_reserve ? true : false
+            Delayed::Backend::Mongoid.batch_reserve
           end
 
           # Lock heartbeats: delayed_job refreshes the locks of running jobs,
