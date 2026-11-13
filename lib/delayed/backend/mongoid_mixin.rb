@@ -168,11 +168,12 @@ module Delayed
           # ones left locked under one of their names (they are idle, so
           # those locks are leftovers). Sorted as in reservation_criteria.
           def batch_reservation_criteria(names, right_now, max_run_time)
-            criteria = where(batch_reservation_selector(names, right_now, max_run_time))
+            criteria = where(batch_reservation_selector(names, right_now, max_run_time)).
+                       reorder(locked_by: -1, priority: 1, run_at: 1)
             criteria = criteria.gte(priority: Worker.min_priority.to_i) if Worker.min_priority
             criteria = criteria.lte(priority: Worker.max_priority.to_i) if Worker.max_priority
             criteria = criteria.any_in(queue: Worker.queues) if Worker.queues.any?
-            criteria.desc(:locked_by).asc(:priority).asc(:run_at)
+            criteria
           end
 
           # Selector of a job that is (still) reservable by the named workers.
@@ -196,12 +197,12 @@ module Delayed
             ).any_of(
               { locked_by: worker.name },
               { locked_at: { '$not' => { '$gte' => (right_now - max_run_time) } } }
-            )
+            ).reorder(locked_by: -1, priority: 1, run_at: 1)
 
             criteria = criteria.gte(priority: Worker.min_priority.to_i) if Worker.min_priority
             criteria = criteria.lte(priority: Worker.max_priority.to_i) if Worker.max_priority
             criteria = criteria.any_in(queue: Worker.queues) if Worker.queues.any?
-            criteria.desc(:locked_by).asc(:priority).asc(:run_at)
+            criteria
           end
         end
       end
