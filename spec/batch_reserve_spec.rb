@@ -75,13 +75,59 @@ describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
     end
   end
 
+  # Locks a job under another process's name, as if it reserved it.
+  def lock_elsewhere(job, name = 'other process')
+    job_class.where(_id: job.id).update_all('$set' => { locked_by: name, locked_at: Time.now.utc })
+  end
+
+  def sorted_updates_supported?
+    job_class.collection.client.cluster.next_primary.description.max_wire_version >= 25
+  end
+
+  describe '.sorted_updates?' do
+    def stub_wire_version(version)
+      description = job_class.collection.client.cluster.next_primary.description
+      allow(description).to receive(:max_wire_version).and_return(version)
+    end
+
+    it 'is true on MongoDB 8.0 (wire version 25) and later' do
+      stub_wire_version(25)
+      expect(job_class.sorted_updates?).to be true
+      stub_wire_version(27)
+      expect(job_class.sorted_updates?).to be true
+    end
+
+    it 'is false before MongoDB 8.0' do
+      stub_wire_version(21)
+      expect(job_class.sorted_updates?).to be false
+    end
+
+    it 'is false with a driver that drops the sort of an updateOne' do
+      stub_wire_version(25)
+      stub_const('Delayed::Backend::Mongoid::Mixin::ClassMethods::DRIVER_SORTS_UPDATES', false)
+      expect(job_class.sorted_updates?).to be false
+    end
+
+    it 'detects that this driver sends the sort' do
+      expect(Mongo::BulkWrite::Transformable::UPDATE_ONE_TRANSFORM.call(filter: {}, update: {}, sort: { a: 1 }))
+        .to include('sort' => { a: 1 })
+    end
+  end
+
   describe '.partial_batch_may_leave_jobs?' do
-    it 'is true with batch_reserve, as candidates may be lost to other processes' do
+    it 'is false with sorted updates, as each update picks its job atomically' do
+      allow(job_class).to receive(:sorted_updates?).and_return(true)
+      expect(job_class.partial_batch_may_leave_jobs?).to be false
+    end
+
+    it 'is true when reserving candidates, as they may be lost to other processes' do
+      allow(job_class).to receive(:sorted_updates?).and_return(false)
       expect(job_class.partial_batch_may_leave_jobs?).to be true
     end
 
-    it 'is false without, as reserve stops only when no job is left' do
+    it 'is false without batch_reserve, as reserve stops only when no job is left' do
       Delayed::Backend::Mongoid.batch_reserve = false
+      allow(job_class).to receive(:sorted_updates?).and_return(false)
       expect(job_class.partial_batch_may_leave_jobs?).to be false
     end
   end
@@ -91,164 +137,130 @@ describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
     expect(Delayed::Backend::Mongoid.batch_reserve).to be false
   end
 
-  it 'locks a distinct job under each worker name, in 3 round trips' do
-    enqueue(6)
-    reserved = nil
-    commands = commands_of { reserved = job_class.reserve_batch(workers) }
+  shared_examples 'a batch reservation' do
+    it 'locks a distinct job under each worker name' do
+      enqueue(6)
+      reserved = job_class.reserve_batch(workers)
 
-    expect(commands).to eq %w[find update find]
-    expect(reserved.map(&:first)).to eq workers
-    expect(reserved.map { |_, job| job.id }.uniq.size).to eq 4
-    reserved.each do |worker, job|
+      expect(reserved.map(&:first)).to eq workers
+      expect(reserved.map { |_, job| job.id }.uniq.size).to eq 4
+      reserved.each do |worker, job|
+        expect(job.locked_by).to eq worker.name
+        expect(job.locked_at).to be_within(1).of(Time.now.utc)
+        expect(job_class.find(job.id).locked_by).to eq worker.name
+      end
+    end
+
+    it 'reserves the jobs reserve would, in priority order' do
+      jobs = Array.new(6) { |i| Delayed::Job.enqueue(SimpleJob.new, priority: 5 - i) } # inserted last to first
+      reserved = job_class.reserve_batch(workers)
+      expect(reserved.map { |_, job| job.id }).to eq jobs.reverse.first(4).map(&:id)
+    end
+
+    it 'reserves earlier jobs first among equal priorities' do
+      late = Delayed::Job.enqueue(SimpleJob.new, run_at: 1.minute.ago)
+      early = Delayed::Job.enqueue(SimpleJob.new, run_at: 2.minutes.ago)
+      urgent = Delayed::Job.enqueue(SimpleJob.new, run_at: 1.second.ago, priority: -1)
+      expect(job_class.reserve_batch(workers).map { |_, job| job.id }).to eq [urgent, early, late].map(&:id)
+    end
+
+    it 'reserves as many jobs as there are, fewer than workers' do
+      jobs = enqueue(2)
+      reserved = job_class.reserve_batch(workers)
+      expect(reserved.map(&:first)).to eq workers.first(2)
+      expect(reserved.map { |_, job| job.id }).to match_array jobs.map(&:id)
+    end
+
+    it 'honours queues and priorities' do
+      Delayed::Worker.queues = %w[mail]
+      Delayed::Worker.min_priority = 1
+      Delayed::Worker.max_priority = 5
+      wanted = Delayed::Job.enqueue(SimpleJob.new, queue: 'mail', priority: 3)
+      Delayed::Job.enqueue(SimpleJob.new, queue: 'other', priority: 3)
+      Delayed::Job.enqueue(SimpleJob.new, queue: 'mail', priority: 0)
+      Delayed::Job.enqueue(SimpleJob.new, queue: 'mail', priority: 9)
+      expect(job_class.reserve_batch(workers).map { |_, job| job.id }).to eq [wanted.id]
+    end
+
+    it 'skips jobs scheduled in the future, and failed jobs' do
+      Delayed::Job.enqueue(SimpleJob.new, run_at: 1.hour.from_now)
+      enqueue(1).first.update_attributes!(failed_at: Time.now.utc)
+      expect(job_class.reserve_batch(workers)).to eq []
+    end
+
+    it 'skips jobs freshly locked by other workers, and takes over expired locks' do
+      fresh, expired = enqueue(2)
+      fresh.update_attributes!(locked_by: 'other', locked_at: Time.now.utc)
+      expired.update_attributes!(locked_by: 'other', locked_at: 2.hours.ago)
+      reserved = job_class.reserve_batch(workers, 1.hour)
+      expect(reserved.map { |_, job| job.id }).to eq [expired.id]
+      expect(job_class.find(fresh.id).locked_by).to eq 'other'
+    end
+
+    it 'takes back jobs left locked under the names of the (idle) workers' do
+      leftover, = enqueue(1)
+      leftover.update_attributes!(locked_by: workers[2].name, locked_at: Time.now.utc)
+      reserved = job_class.reserve_batch(workers)
+      expect(reserved.size).to eq 1
+      worker, job = reserved.first
+      expect(job.id).to eq leftover.id
       expect(job.locked_by).to eq worker.name
-      expect(job.locked_at).to be_within(1).of(Time.now.utc)
-      expect(job_class.find(job.id).locked_by).to eq worker.name
     end
-  end
 
-  it 'takes the same number of round trips for 32 workers' do
-    many = Array.new(32) { |i| Delayed::Worker.new.tap { |w| w.thread_index = i } }
-    enqueue(32)
-    reserved = nil
-    commands = commands_of { reserved = job_class.reserve_batch(many) }
-    expect(commands).to eq %w[find update find]
-    expect(reserved.size).to eq 32
-  end
-
-  it 'reserves the jobs reserve would, in priority order' do
-    jobs = enqueue(6)
-    reserved = job_class.reserve_batch(workers)
-    expect(reserved.map { |_, job| job.id }).to eq jobs.first(4).map(&:id)
-  end
-
-  it 'reserves as many jobs as there are, fewer than workers' do
-    jobs = enqueue(2)
-    reserved = job_class.reserve_batch(workers)
-    expect(reserved.map(&:first)).to eq workers.first(2)
-    expect(reserved.map { |_, job| job.id }).to match_array jobs.map(&:id)
-  end
-
-  it 'returns no jobs in one round trip when none is available' do
-    reserved = nil
-    commands = commands_of { reserved = job_class.reserve_batch(workers) }
-    expect(reserved).to eq []
-    expect(commands).to eq %w[find]
-  end
-
-  it 'honours queues and priorities' do
-    Delayed::Worker.queues = %w[mail]
-    Delayed::Worker.min_priority = 1
-    Delayed::Worker.max_priority = 5
-    wanted = Delayed::Job.enqueue(SimpleJob.new, queue: 'mail', priority: 3)
-    Delayed::Job.enqueue(SimpleJob.new, queue: 'other', priority: 3)
-    Delayed::Job.enqueue(SimpleJob.new, queue: 'mail', priority: 0)
-    Delayed::Job.enqueue(SimpleJob.new, queue: 'mail', priority: 9)
-    expect(job_class.reserve_batch(workers).map { |_, job| job.id }).to eq [wanted.id]
-  end
-
-  it 'skips jobs scheduled in the future, and failed jobs' do
-    Delayed::Job.enqueue(SimpleJob.new, run_at: 1.hour.from_now)
-    enqueue(1).first.update_attributes!(failed_at: Time.now.utc)
-    expect(job_class.reserve_batch(workers)).to eq []
-  end
-
-  it 'skips jobs freshly locked by other workers, and takes over expired locks' do
-    fresh, expired = enqueue(2)
-    fresh.update_attributes!(locked_by: 'other', locked_at: Time.now.utc)
-    expired.update_attributes!(locked_by: 'other', locked_at: 2.hours.ago)
-    reserved = job_class.reserve_batch(workers, 1.hour)
-    expect(reserved.map { |_, job| job.id }).to eq [expired.id]
-    expect(job_class.find(fresh.id).locked_by).to eq 'other'
-  end
-
-  it 'takes back jobs left locked under the names of the (idle) workers' do
-    leftover, = enqueue(1)
-    leftover.update_attributes!(locked_by: workers[2].name, locked_at: Time.now.utc)
-    reserved = job_class.reserve_batch(workers)
-    expect(reserved.size).to eq 1
-    worker, job = reserved.first
-    expect(job.id).to eq leftover.id
-    expect(job.locked_by).to eq worker.name
-  end
-
-  it 'does not take jobs locked by sibling workers that are busy' do
-    busy, = enqueue(1)
-    sibling = Delayed::Worker.new.tap { |w| w.thread_index = 9 }
-    busy.update_attributes!(locked_by: sibling.name, locked_at: Time.now.utc)
-    expect(job_class.reserve_batch(workers)).to eq []
-  end
-
-  it 'leaves candidates that another process reserved meanwhile to it' do
-    jobs = enqueue(4)
-    allow_any_instance_of(Mongo::Collection).to receive(:bulk_write).and_wrap_original do |m, claims, **options|
-      # Another process locks the second candidate between our find and our update.
-      job_class.where(_id: jobs[1].id).update_all('$set' => { locked_by: 'other process', locked_at: Time.now.utc })
-      m.call(claims, **options)
+    it 'does not take jobs locked by sibling workers that are busy' do
+      busy, = enqueue(1)
+      sibling = Delayed::Worker.new.tap { |w| w.thread_index = 9 }
+      busy.update_attributes!(locked_by: sibling.name, locked_at: Time.now.utc)
+      expect(job_class.reserve_batch(workers)).to eq []
     end
-    reserved = job_class.reserve_batch(workers)
 
-    expect(reserved.map(&:first)).to eq [workers[0], workers[2], workers[3]]
-    expect(reserved.map { |_, job| job.id }).to eq [jobs[0], jobs[2], jobs[3]].map(&:id)
-    expect(job_class.find(jobs[1].id).locked_by).to eq 'other process'
-  end
-
-  it 'batches as soon as two workers are idle' do
-    enqueue(2)
-    expect(job_class).not_to receive(:reserve)
-    reserved = nil
-    commands = commands_of { reserved = job_class.reserve_batch(workers.first(2)) }
-    expect(commands).to eq %w[find update find]
-    expect(reserved.size).to eq 2
-  end
-
-  it 'reserves for a single idle worker in one round trip' do
-    enqueue(2)
-    reserved = nil
-    commands = commands_of { reserved = job_class.reserve_batch(workers.first(1)) }
-    expect(commands).to eq %w[findAndModify]
-    expect(reserved.map(&:first)).to eq workers.first(1)
-  end
-
-  it 'reserves one job per worker when off' do
-    Delayed::Backend::Mongoid.batch_reserve = false
-    enqueue(4)
-    reserved = nil
-    commands = commands_of { reserved = job_class.reserve_batch(workers) }
-    expect(commands).to eq %w[findAndModify] * 4
-    expect(reserved.size).to eq 4
-  end
-
-  # Several "processes" (threads with their own worker names) reserving from
-  # the same collection at once.
-  it 'never locks a job for two workers under contention' do
-    jobs = enqueue(60)
-    groups = Array.new(3) do |g|
-      Array.new(8) { |i| Delayed::Worker.new.tap { |w| w.name = "process:#{g} thread:#{i}" } }
+    it 'reserves for a single idle worker in one round trip' do
+      enqueue(2)
+      reserved = nil
+      commands = commands_of { reserved = job_class.reserve_batch(workers.first(1)) }
+      expect(commands).to eq %w[findAndModify]
+      expect(reserved.map(&:first)).to eq workers.first(1)
     end
-    reserved = Queue.new
-    threads = groups.map do |group|
-      Thread.new do
-        loop do
-          batch = job_class.reserve_batch(group)
-          break if batch.empty? && job_class.where(locked_by: nil).none?
 
-          batch.each do |worker, job|
-            reserved << [worker.name, job.id]
-            # Release the worker (keep its job locked under another name).
-            job_class.where(_id: job.id).update_all('$set' => { locked_by: "done #{job.id}" })
+    it 'reserves one job per worker when off' do
+      Delayed::Backend::Mongoid.batch_reserve = false
+      enqueue(4)
+      reserved = nil
+      commands = commands_of { reserved = job_class.reserve_batch(workers) }
+      expect(commands).to eq %w[findAndModify] * 4
+      expect(reserved.size).to eq 4
+    end
+
+    # Several "processes" (threads with their own worker names) reserving
+    # from the same collection at once.
+    it 'never locks a job for two workers under contention' do
+      jobs = enqueue(60)
+      groups = Array.new(3) do |g|
+        Array.new(8) { |i| Delayed::Worker.new.tap { |w| w.name = "process:#{g} thread:#{i}" } }
+      end
+      reserved = Queue.new
+      threads = groups.map do |group|
+        Thread.new do
+          loop do
+            batch = job_class.reserve_batch(group)
+            break if batch.empty? && job_class.where(locked_by: nil).none?
+
+            batch.each do |worker, job|
+              reserved << [worker.name, job.id]
+              # Release the worker (keep its job locked under another name).
+              job_class.where(_id: job.id).update_all('$set' => { locked_by: "done #{job.id}" })
+            end
           end
         end
       end
+      Timeout.timeout(30) { threads.each(&:join) }
+
+      ids = Array.new(reserved.size) { reserved.pop.last }
+      expect(ids.size).to eq 60
+      expect(ids).to match_array jobs.map(&:id)
     end
-    Timeout.timeout(30) { threads.each(&:join) }
 
-    ids = Array.new(reserved.size) { reserved.pop.last }
-    expect(ids.size).to eq 60
-    expect(ids).to match_array jobs.map(&:id)
-  end
-
-  describe 'with the dispatcher' do
-    it 'runs every job exactly once across two dispatchers, with partial batches re-polled at once' do
+    it 'runs every job exactly once across two dispatchers' do
       ConcurrencyJob.reset
       40.times { |i| Delayed::Job.enqueue(ConcurrencyJob.new(i)) }
       Delayed::Worker.exit_on_complete = true
@@ -264,6 +276,151 @@ describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
       expect(Delayed::Job.count).to eq 0
       # Never slept sleep_delay (5s) while jobs were left.
       expect(elapsed).to be < 5
+    end
+  end
+
+  context 'with sorted updates (MongoDB 8.0+)' do
+    before do
+      skip 'needs MongoDB 8.0+' unless sorted_updates_supported?
+      expect(job_class.sorted_updates?).to be true
+    end
+
+    it_behaves_like 'a batch reservation'
+
+    it 'locks a job per worker in 2 round trips' do
+      enqueue(6)
+      reserved = nil
+      commands = commands_of { reserved = job_class.reserve_batch(workers) }
+      expect(commands).to eq %w[update find]
+      expect(reserved.size).to eq 4
+    end
+
+    it 'takes the same number of round trips for 32 workers' do
+      many = Array.new(32) { |i| Delayed::Worker.new.tap { |w| w.thread_index = i } }
+      enqueue(32)
+      reserved = nil
+      commands = commands_of { reserved = job_class.reserve_batch(many) }
+      expect(commands).to eq %w[update find]
+      expect(reserved.size).to eq 32
+    end
+
+    it 'returns no jobs in one round trip when none is available' do
+      reserved = nil
+      commands = commands_of { reserved = job_class.reserve_batch(workers) }
+      expect(reserved).to eq []
+      expect(commands).to eq %w[update]
+    end
+
+    it 'moves on to the next jobs when another process locked the first ones meanwhile' do
+      jobs = enqueue(6)
+      allow_any_instance_of(Mongo::Collection).to receive(:bulk_write).and_wrap_original do |m, claims, **options|
+        lock_elsewhere(jobs[0])
+        lock_elsewhere(jobs[2])
+        m.call(claims, **options)
+      end
+      reserved = job_class.reserve_batch(workers)
+
+      expect(reserved.map(&:first)).to eq workers
+      expect(reserved.map { |_, job| job.id }).to eq [jobs[1], jobs[3], jobs[4], jobs[5]].map(&:id)
+    end
+
+    it 'loses no job to processes reserving at the same moment' do
+      jobs = enqueue(16)
+      groups = Array.new(4) do |g|
+        Array.new(4) { |i| Delayed::Worker.new.tap { |w| w.name = "process:#{g} thread:#{i}" } }
+      end
+      gate = Queue.new
+      threads = groups.map do |group|
+        Thread.new do
+          gate.pop
+          job_class.reserve_batch(group)
+        end
+      end
+      4.times { gate << :go }
+      batches = Timeout.timeout(30) { threads.map(&:value) }
+
+      expect(batches.map(&:size)).to eq [4] * 4
+      expect(batches.flatten(1).map { |_, job| job.id }).to match_array jobs.map(&:id)
+    end
+
+    it 'returns only the job it just locked when a worker has older leftover locks' do
+      first, second = enqueue(2)
+      [first, second].each { |job| job.update_attributes!(locked_by: workers[1].name, locked_at: 2.minutes.ago) }
+      reserved = job_class.reserve_batch(workers)
+
+      expect(reserved.map { |worker, job| [worker, job.id] }).to eq [[workers[1], first.id]]
+      expect(job_class.find(second.id).locked_by).to eq workers[1].name
+      expect(job_class.find(second.id).locked_at).to be < 1.minute.ago
+    end
+
+    it 'falls back to reserving candidates when the primary turns out to be older than 8.0' do
+      enqueue(6)
+      calls = 0
+      allow_any_instance_of(Mongo::Collection).to receive(:bulk_write).and_wrap_original do |m, claims, **options|
+        calls += 1
+        if calls == 1
+          raise Mongo::Error::OperationFailure.new("BSON field 'update.updates.sort' is an unknown field.", nil,
+                                                   code: 40_415, code_name: 'IDLUnknownField')
+        end
+        m.call(claims, **options)
+      end
+      reserved = nil
+      commands = commands_of { reserved = job_class.reserve_batch(workers) }
+
+      expect(commands).to eq %w[find update find]
+      expect(reserved.size).to eq 4
+      expect(reserved.map { |worker, job| [worker.name, job.locked_by] }).to all(satisfy { |a, b| a == b })
+    end
+
+    it 're-raises other operation failures' do
+      enqueue(2)
+      error = Mongo::Error::OperationFailure.new('boom', nil, code: 2)
+      allow_any_instance_of(Mongo::Collection).to receive(:bulk_write).and_raise(error)
+      expect { job_class.reserve_batch(workers) }.to raise_error(error)
+    end
+  end
+
+  context 'with candidates (before MongoDB 8.0)' do
+    before { allow(job_class).to receive(:sorted_updates?).and_return(false) }
+
+    it_behaves_like 'a batch reservation'
+
+    it 'locks a job per worker in 3 round trips' do
+      enqueue(6)
+      reserved = nil
+      commands = commands_of { reserved = job_class.reserve_batch(workers) }
+      expect(commands).to eq %w[find update find]
+      expect(reserved.size).to eq 4
+    end
+
+    it 'takes the same number of round trips for 32 workers' do
+      many = Array.new(32) { |i| Delayed::Worker.new.tap { |w| w.thread_index = i } }
+      enqueue(32)
+      reserved = nil
+      commands = commands_of { reserved = job_class.reserve_batch(many) }
+      expect(commands).to eq %w[find update find]
+      expect(reserved.size).to eq 32
+    end
+
+    it 'returns no jobs in one round trip when none is available' do
+      reserved = nil
+      commands = commands_of { reserved = job_class.reserve_batch(workers) }
+      expect(reserved).to eq []
+      expect(commands).to eq %w[find]
+    end
+
+    it 'leaves candidates that another process reserved meanwhile to it' do
+      jobs = enqueue(4)
+      allow_any_instance_of(Mongo::Collection).to receive(:bulk_write).and_wrap_original do |m, claims, **options|
+        # Another process locks the second candidate between our find and our update.
+        lock_elsewhere(jobs[1])
+        m.call(claims, **options)
+      end
+      reserved = job_class.reserve_batch(workers)
+
+      expect(reserved.map(&:first)).to eq [workers[0], workers[2], workers[3]]
+      expect(reserved.map { |_, job| job.id }).to eq [jobs[0], jobs[2], jobs[3]].map(&:id)
+      expect(job_class.find(jobs[1].id).locked_by).to eq 'other process'
     end
   end
 end

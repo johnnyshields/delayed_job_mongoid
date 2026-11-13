@@ -15,14 +15,9 @@ jobs:
       matrix:
         ruby: ['3.2', '3.3', '3.4', '4.0', jruby-10.0, jruby-head, ruby-head]
         mongoid: ['7', '8', '9']
-        include:
-          # The newest MongoDB server each Mongoid version supports
-          - mongoid: '7'
-            mongodb: '8.0'
-          - mongoid: '8'
-            mongodb: '7.0'
-          - mongoid: '9'
-            mongodb: '8.0'
+        # MongoDB 8.0+, so that batched reservation takes its sorted-update
+        # path (older servers are covered by stubbing the server check)
+        mongodb: ['8.0']
 
     continue-on-error: ${{ endsWith(matrix.ruby, 'head') }}
 

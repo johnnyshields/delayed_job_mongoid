@@ -54,6 +54,7 @@ describe Delayed::Backend::Mongoid::Configuration do
     end
 
     it 'is what the job class reserves by' do
+      allow(Delayed::Backend::Mongoid::Job).to receive(:sorted_updates?).and_return(false)
       backend.batch_reserve = true
       expect(Delayed::Backend::Mongoid::Job.partial_batch_may_leave_jobs?).to be true
       backend.batch_reserve = false

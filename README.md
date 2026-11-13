@@ -79,11 +79,16 @@ Delayed::Worker.silence_polling = true # or --silence-polling / SILENCE_POLLING=
 ### Batched Reservation
 
 With multi-threaded workers, filling N idle threads takes N `findAndModify`
-round trips by default. With batched reservation, it takes 3 whatever N is:
-find candidates, lock one per thread in a single bulk write of conditional
-updates, then read back which locks were won. Candidates lost to other
-processes are left to them; delayed_job polls again at once after a partial
-batch.
+round trips by default. With batched reservation, it takes 2 whatever N is on
+MongoDB Server 8.0+: a single bulk write of sorted `updateOne`s, each locking
+the next job for one thread, then reading back the locked jobs. The server
+picks and locks each job atomically, so none is lost to other processes.
+
+Before MongoDB 8.0, which can't sort an `updateOne`, it takes 3: find
+candidates, lock one per thread in a bulk write of conditional updates, then
+read back which locks were claimed. Candidates lost to other processes are left
+to them; delayed_job polls again at once after a partial batch. The server
+version is checked on each poll, so an upgrade switches over by itself.
 
 ```ruby
 # in config/initializers/delayed_job.rb
@@ -93,8 +98,9 @@ end
 # or: Delayed::Backend::Mongoid.batch_reserve = true
 ```
 
-Time to fill all threads of a worker process (median, local MongoDB 8.0, plus
-simulated network latency per round trip):
+Time to fill all threads of a worker process with 3 round trips (median, local
+MongoDB, plus simulated network latency per round trip; 2 round trips on
+MongoDB 8.0+ save one more latency):
 
 | Threads | Local: off / on | +2ms: off / on | +5ms: off / on |
 | --- | --- | --- | --- |
