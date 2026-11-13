@@ -76,6 +76,34 @@ that finish jobs logged. The same `ActiveSupport::Logger` requirement applies.
 Delayed::Worker.silence_polling = true # or --silence-polling / SILENCE_POLLING=1
 ```
 
+### Batched Reservation
+
+With multi-threaded workers, filling N idle threads takes N `findAndModify`
+round trips by default. With batched reservation, it takes 3 whatever N is:
+find candidates, lock one per thread in a single bulk write of conditional
+updates, then read back which locks were won. Candidates lost to other
+processes are left to them; delayed_job polls again at once after a partial
+batch.
+
+```ruby
+# in config/initializers/delayed_job.rb
+Delayed::Backend::Mongoid::Job.batch_reserve = true
+Delayed::Backend::Mongoid::Job.batch_reserve_threshold = 4 # default: fewer idle threads reserve one by one
+```
+
+Time to fill all threads of a worker process (median, local MongoDB 8.0, plus
+simulated network latency per round trip):
+
+| Threads | Local: off / on | +2ms: off / on | +5ms: off / on |
+| --- | --- | --- | --- |
+| 4 | 4.3 / 4.0 ms | 13.3 / 10.8 ms | 27.9 / 20.3 ms |
+| 16 | 18.0 / 5.4 ms | 55.5 / 12.4 ms | 115.8 / 21.9 ms |
+| 32 | 33.3 / 6.9 ms | 108.4 / 14.4 ms | 229.7 / 25.3 ms |
+
+Recommended with 8 or more threads per process, or a remote database. It only
+matters when many threads are idle at once (start-up, bursts of jobs); an idle
+poll is one query either way.
+
 ### Customizing Job Class
 
 Delayed Job allows specifying a custom backend class for jobs.

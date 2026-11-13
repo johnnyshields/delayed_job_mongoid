@@ -30,6 +30,13 @@ module Delayed
 
           before_save :set_default_run_at
 
+          # Batched reservation (off by default): when at least
+          # batch_reserve_threshold threads are idle, reserve_batch reserves
+          # their jobs in 3 round trips instead of one find_one_and_update
+          # per thread. See .reserve_batch.
+          class_attribute :batch_reserve, instance_accessor: false, instance_predicate: false, default: false
+          class_attribute :batch_reserve_threshold, instance_accessor: false, instance_predicate: false, default: 4
+
           def reload(*args)
             reset
             super
@@ -68,6 +75,40 @@ module Delayed
               { '$set' => { locked_at: right_now, locked_by: worker.name } },
               { return_document: :after }
             )
+          end
+
+          # Reserves a job for each of the given (idle) workers, or as many as
+          # are available; returns [[worker, job], ...]. With batch_reserve
+          # and at least batch_reserve_threshold workers, takes 3 round trips
+          # however many workers there are:
+          #
+          # 1. find up to one candidate per worker, as reserve would;
+          # 2. one bulk write of conditional updates, each locking one
+          #    candidate under one worker's name if it is still available
+          #    (another process may have reserved it meanwhile);
+          # 3. find which candidates were locked under our names.
+          #
+          # Candidates lost to other processes are not retried here: fewer
+          # jobs than workers are returned, and delayed_job polls again at
+          # once. Otherwise, one find_one_and_update per worker (see reserve).
+          def reserve_batch(workers, max_run_time = Worker.max_run_time)
+            return super unless batch_reserve && workers.size >= batch_reserve_threshold.to_i
+
+            right_now = db_time_now
+            names = workers.map(&:name)
+            candidates = batch_reservation_criteria(names, right_now, max_run_time).limit(workers.size).pluck(:_id)
+            return [] if candidates.empty?
+
+            claims = candidates.zip(workers).map do |id, worker|
+              { update_one: {
+                filter: batch_reservation_selector(names, right_now, max_run_time).merge('_id' => id),
+                update: { '$set' => { 'locked_at' => right_now, 'locked_by' => worker.name } }
+              } }
+            end
+            collection.bulk_write(claims, ordered: false)
+
+            won = where(:_id.in => candidates, :locked_by.in => names).index_by(&:locked_by)
+            workers.filter_map { |worker| (job = won[worker.name]) && [worker, job] }
           end
 
           # Lock heartbeats: delayed_job refreshes the locks of running jobs,
@@ -117,6 +158,29 @@ module Delayed
           end
 
           private
+
+          # The jobs any of the named workers can reserve: available ones, and
+          # ones left locked under one of their names (they are idle, so
+          # those locks are leftovers). Sorted as in reservation_criteria.
+          def batch_reservation_criteria(names, right_now, max_run_time)
+            criteria = where(batch_reservation_selector(names, right_now, max_run_time))
+            criteria = criteria.gte(priority: Worker.min_priority.to_i) if Worker.min_priority
+            criteria = criteria.lte(priority: Worker.max_priority.to_i) if Worker.max_priority
+            criteria = criteria.any_in(queue: Worker.queues) if Worker.queues.any?
+            criteria.desc(:locked_by).asc(:priority).asc(:run_at)
+          end
+
+          # Selector of a job that is (still) reservable by the named workers.
+          def batch_reservation_selector(names, right_now, max_run_time)
+            {
+              'run_at' => { '$lte' => right_now },
+              'failed_at' => nil,
+              '$or' => [
+                { 'locked_by' => { '$in' => names } },
+                { 'locked_at' => { '$not' => { '$gte' => right_now - max_run_time } } }
+              ]
+            }
+          end
 
           # Mongo criteria matching all the jobs the worker can reserve.
           # Jobs are sorted by priority and run_at.
