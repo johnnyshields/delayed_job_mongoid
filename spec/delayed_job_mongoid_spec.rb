@@ -3,6 +3,18 @@ require 'spec_helper'
 describe Delayed::Backend::Mongoid::Job do
   it_behaves_like 'a delayed_job backend'
   it_behaves_like 'a delayed_job backend supporting lock heartbeats'
+  it_behaves_like 'a delayed_job backend running a dispatcher'
+
+  context 'with batch_reserve (one bulk write per poll)' do
+    around do |example|
+      Delayed::Backend::Mongoid.batch_reserve = true
+      example.run
+    ensure
+      Delayed::Backend::Mongoid.reset_configuration!
+    end
+
+    it_behaves_like 'a delayed_job backend running a dispatcher'
+  end
 
   describe '#save_if_locked_by' do
     it 'writes only the changed fields' do
