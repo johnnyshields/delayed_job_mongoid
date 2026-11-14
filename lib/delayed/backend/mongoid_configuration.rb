@@ -3,17 +3,14 @@ require 'forwardable'
 module Delayed
   module Backend
     module Mongoid
-      # Settings of the Mongoid backend, set in an initializer:
+      # Mongoid backend settings:
       #
       #   Delayed::Backend::Mongoid.configure do |config|
       #     config.batch_reserve = true
       #   end
-      #
-      # or directly, e.g. Delayed::Backend::Mongoid.batch_reserve = true.
       class Configuration
-        # Batched reservation (off by default): when several threads are
-        # idle, Job.reserve_batch reserves their jobs in 2 round trips
-        # instead of one find_one_and_update per thread.
+        # Reserve jobs for several idle threads in 2 round trips instead of
+        # one find_one_and_update each. Default: false.
         attr_reader :batch_reserve
 
         def initialize
@@ -30,17 +27,14 @@ module Delayed
 
         def_delegators :configuration, :batch_reserve, :batch_reserve=
 
-        # Created when this file loads, not on first use: worker threads
-        # read it concurrently, and a lazy `||=` could create two.
+        # Set eagerly: a lazy `||=` could create two under concurrent threads.
         attr_reader :configuration
 
-        # Yields the configuration; returns it.
         def configure
           yield configuration
           configuration
         end
 
-        # Restores the default settings (e.g. between specs).
         def reset_configuration!
           @configuration = Configuration.new
         end

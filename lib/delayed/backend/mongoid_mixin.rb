@@ -36,12 +36,10 @@ module Delayed
             super
           end
 
-          # Deletes the job only while the named worker holds its lock.
           def destroy_if_locked_by(worker_name) # rubocop:disable Naming/PredicateMethod
             self.class.where(_id: id, locked_by: worker_name).delete.positive?
           end
 
-          # Saves the job only while the named worker holds its lock.
           def save_if_locked_by(worker_name)
             run_callbacks(:save) do
               changes = changed_attributes.keys.to_h { |field| [field, attributes[field]] }
@@ -71,20 +69,11 @@ module Delayed
             )
           end
 
-          # Reserves a job for each of the given (idle) workers, or as many as
-          # are available; returns [[worker, job], ...]. With batch_reserve
-          # (see Delayed::Backend::Mongoid::Configuration) and more than one
-          # worker, takes 2 round trips however many workers there are:
-          #
-          # 1. one bulk write of sorted updateOnes, each locking the first job
-          #    reserve would pick under one worker's name (the server picks
-          #    and locks each job atomically, so none is lost to other
-          #    processes: a short batch means no job is left);
-          # 2. read back the locked jobs.
-          #
-          # Otherwise, one find_one_and_update per worker (see reserve).
+          # With batch_reserve and several workers: one bulk write of sorted
+          # updateOnes, each atomically locking one job (so other processes
+          # can't take it; a short batch means no jobs are left), then one
+          # read-back of the locked jobs.
           def reserve_batch(workers, max_run_time = Worker.max_run_time)
-            # A single worker takes one find_one_and_update (see reserve).
             return super unless Delayed::Backend::Mongoid.batch_reserve && workers.size > 1
 
             right_now = db_time_now
@@ -104,8 +93,7 @@ module Delayed
             claimed_jobs(workers, right_now)
           end
 
-          # Lock heartbeats: delayed_job refreshes the locks of running jobs,
-          # and reserve takes over locks older than the expiry it is given.
+          # Running jobs' locks are refreshed; reserve takes over expired ones.
           def lock_heartbeats?
             true
           end
@@ -114,9 +102,7 @@ module Delayed
             any_in(locked_by: worker_names).update_all('$set' => { locked_at: db_time_now }).modified_count
           end
 
-          # With Delayed::Worker.silence_polling, silences the Mongo driver's
-          # logger below WARN on the polling thread. Needs an
-          # ActiveSupport::Logger (thread-local levels); other loggers log.
+          # Needs ActiveSupport::Logger, whose silence level is thread-local.
           def silence_polling(&)
             logger = ::Mongo::Logger.logger
             return yield unless logger.respond_to?(:silence)
@@ -124,8 +110,6 @@ module Delayed
             logger.silence(::Logger::WARN, &)
           end
 
-          # The jobs locked by the named worker, so that delayed_job can
-          # recover them when the worker's process dies.
           def locked_jobs(worker_name)
             where(locked_by: worker_name).to_a
           end
@@ -135,13 +119,10 @@ module Delayed
             where(locked_by: worker_name).update_all(locked_at: nil, locked_by: nil)
           end
 
-          # The jobs locked by any of the named workers, in one query: e.g.
-          # every thread and slot of a worker process that died.
           def locked_jobs_of(worker_names)
             any_in(locked_by: worker_names).to_a
           end
 
-          # Clears the locks of all the named workers in one update.
           def clear_locks_of!(worker_names)
             any_in(locked_by: worker_names).update_all(locked_at: nil, locked_by: nil)
           end
@@ -163,9 +144,7 @@ module Delayed
 
           private
 
-          # The jobs just locked (at right_now) under the workers' names, by
-          # worker. Other jobs left locked under those names (leftovers from
-          # a crash that weren't re-locked) stay for a later reservation.
+          # Older locks under these names (crash leftovers) are left for a later reserve.
           def claimed_jobs(workers, right_now)
             claimed = where(locked_at: right_now).any_in(locked_by: workers.map(&:name)).index_by(&:locked_by)
             workers.filter_map { |worker| (job = claimed[worker.name]) && [worker, job] }
