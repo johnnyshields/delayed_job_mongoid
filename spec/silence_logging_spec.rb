@@ -7,7 +7,7 @@ SilencePollingSleepJob = Struct.new(:seconds) do
   end
 end
 
-describe 'Delayed::Worker.silence_polling with Mongoid' do
+describe 'Delayed::Worker.silence_logging with Mongoid' do
   let(:mongo_io) { StringIO.new }
   let(:mongo_logger) { ActiveSupport::Logger.new(mongo_io).tap { |l| l.level = Logger::DEBUG } }
   # Ruby 3.4 changed Hash#inspect from {"a"=>1} to {"a" => 1}
@@ -47,7 +47,7 @@ describe 'Delayed::Worker.silence_polling with Mongoid' do
   end
 
   context 'when on' do
-    before { Delayed::Worker.silence_polling = true }
+    before { Delayed::Worker.silence_logging = true }
 
     it 'does not log the reservation queries' do
       run_to_completion
@@ -76,10 +76,10 @@ describe 'Delayed::Worker.silence_polling with Mongoid' do
     end
   end
 
-  describe 'Delayed::Job.silence_polling' do
+  describe 'Delayed::Job.silence_logging' do
     it 'silences the Mongo logger below WARN in the block, on this thread only' do
       other = nil
-      result = Delayed::Job.silence_polling do
+      result = Delayed::Job.silence_logging do
         mongo_logger.info('quiet')
         mongo_logger.warn('loud')
         other = Thread.new { mongo_logger.info('other thread') }.join
@@ -95,7 +95,7 @@ describe 'Delayed::Worker.silence_polling with Mongoid' do
     it 'just yields with a logger that cannot silence' do
       plain_io = StringIO.new
       Mongo::Logger.logger = Logger.new(plain_io)
-      expect(Delayed::Job.silence_polling do
+      expect(Delayed::Job.silence_logging do
         Mongo::Logger.logger.info('logged')
         :ran
       end).to eq :ran

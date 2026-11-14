@@ -43,7 +43,7 @@ describe 'Reads from the primary' do
   it 'lists the jobs locked by a worker from the primary' do
     job_class.create!(payload_object: SimpleJob.new, locked_by: 'w0', locked_at: job_class.db_time_now)
     expect(job_class.locked_jobs('w0').size).to eq 1
-    expect(job_class.locked_jobs_of(%w[w0 w1]).size).to eq 1
+    expect(job_class.locked_jobs(%w[w0 w1]).size).to eq 1
     expect(read_preferences).to eq [{ 'mode' => :primary }] * 2
   end
 

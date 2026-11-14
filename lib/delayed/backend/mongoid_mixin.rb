@@ -102,28 +102,21 @@ module Delayed
           end
 
           # Needs ActiveSupport::Logger, whose silence level is thread-local.
-          def silence_polling(&)
+          def silence_logging(&)
             logger = ::Mongo::Logger.logger
             return yield unless logger.respond_to?(:silence)
 
             logger.silence(::Logger::WARN, &)
           end
 
-          def locked_jobs(worker_name)
-            on_primary(where(locked_by: worker_name)).to_a
+          # A worker name, or an array of names (all of a dead process's).
+          def locked_jobs(worker_names)
+            on_primary(any_in(locked_by: Array(worker_names))).to_a
           end
 
           # When a worker is exiting, make sure we don't have any locked jobs.
-          def clear_locks!(worker_name)
-            where(locked_by: worker_name).update_all(locked_at: nil, locked_by: nil)
-          end
-
-          def locked_jobs_of(worker_names)
-            on_primary(any_in(locked_by: worker_names)).to_a
-          end
-
-          def clear_locks_of!(worker_names)
-            any_in(locked_by: worker_names).update_all(locked_at: nil, locked_by: nil)
+          def clear_locks!(worker_names)
+            any_in(locked_by: Array(worker_names)).update_all(locked_at: nil, locked_by: nil)
           end
 
           # In a multi-process setup, this will be called at boot time
@@ -150,7 +143,7 @@ module Delayed
           end
 
           # Reads the jobs just locked (claimed_jobs) or held by workers
-          # (locked_jobs, locked_jobs_of) from the primary, which took those
+          # (locked_jobs) from the primary, which took those
           # writes: a secondary may not have them yet.
           def on_primary(criteria)
             criteria.read(mode: :primary)
