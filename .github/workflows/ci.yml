@@ -13,7 +13,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ruby: ['3.2', '3.3', '3.4', '4.0', jruby-10.0, jruby-head, truffleruby, truffleruby-head, ruby-head]
+        # jruby-head is left out until bson releases its fix for JRuby 10.1+
+        # (mongodb/bson-ruby#377, merged after 5.2.0): ByteBuf instantiates
+        # org.jruby.RubyFixnum, which JRuby 10.1 made abstract, so any BSON
+        # serialization raises java.lang.InstantiationError. Restore it then.
+        ruby: ['3.2', '3.3', '3.4', '4.0', jruby-10.0, truffleruby, truffleruby-head, ruby-head]
         mongoid: ['7', '8', '9']
         # Batched reservation requires MongoDB 8.0+ (sort on updateOne)
         mongodb: ['8.0']
