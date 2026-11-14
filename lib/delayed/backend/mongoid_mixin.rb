@@ -61,10 +61,10 @@ module Delayed
           # Reserves one job for the worker.
           # Atomically picks and locks one job from the collection.
           def reserve(worker, max_run_time = Worker.max_run_time)
-            right_now = db_time_now
-            criteria = reservation_criteria(worker, right_now, max_run_time)
+            now = db_time_now
+            criteria = reservation_criteria(worker, now, max_run_time)
             criteria.find_one_and_update(
-              { '$set' => { locked_at: right_now, locked_by: worker.name } },
+              { '$set' => { locked_at: now, locked_by: worker.name } },
               { return_document: :after }
             )
           end
@@ -76,13 +76,13 @@ module Delayed
           def reserve_batch(workers, max_run_time = Worker.max_run_time)
             return super unless Delayed::Backend::Mongoid.batch_reserve && workers.size > 1
 
-            right_now = db_time_now
+            now = db_time_now
             claims = workers.map do |worker|
-              criteria = reservation_criteria(worker, right_now, max_run_time)
+              criteria = reservation_criteria(worker, now, max_run_time)
               {
                 update_one: {
                   filter: criteria.selector,
-                  update: { '$set' => { 'locked_at' => right_now, 'locked_by' => worker.name } },
+                  update: { '$set' => { 'locked_at' => now, 'locked_by' => worker.name } },
                   # Requires MongoDB Server 8.0+ (sort on updateOne)
                   sort: criteria.options[:sort]
                 }
@@ -90,7 +90,7 @@ module Delayed
             end
             return [] if collection.bulk_write(claims, ordered: false).modified_count.zero?
 
-            claimed_jobs(workers, right_now)
+            claimed_jobs(workers, now)
           end
 
           # Running jobs' locks are refreshed; reserve takes over expired ones.
@@ -145,20 +145,20 @@ module Delayed
           private
 
           # Older locks under these names (crash leftovers) are left for a later reserve.
-          def claimed_jobs(workers, right_now)
-            claimed = where(locked_at: right_now).any_in(locked_by: workers.map(&:name)).index_by(&:locked_by)
+          def claimed_jobs(workers, now)
+            claimed = where(locked_at: now).any_in(locked_by: workers.map(&:name)).index_by(&:locked_by)
             workers.filter_map { |worker| (job = claimed[worker.name]) && [worker, job] }
           end
 
           # Mongo criteria matching all the jobs the worker can reserve.
           # Jobs are sorted by priority and run_at.
-          def reservation_criteria(worker, right_now, max_run_time)
+          def reservation_criteria(worker, now, max_run_time)
             criteria = where(
-              run_at: { '$lte' => right_now },
+              run_at: { '$lte' => now },
               failed_at: nil
             ).any_of(
               { locked_by: worker.name },
-              { locked_at: { '$not' => { '$gte' => (right_now - max_run_time) } } }
+              { locked_at: { '$not' => { '$gte' => (now - max_run_time) } } }
             ).reorder(locked_by: -1, priority: 1, run_at: 1)
 
             criteria = criteria.gte(priority: Worker.min_priority.to_i) if Worker.min_priority
