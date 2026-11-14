@@ -1,6 +1,6 @@
 require 'spec_helper'
 
-describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
+describe 'Batched reservation (Delayed::Worker.batch_reserve)' do
   # Records the names of the commands sent to MongoDB (a command monitoring
   # subscriber). Scoped to this spec, not defined at the top level.
   command_counter = Struct.new(:commands, :mutex) do
@@ -18,10 +18,9 @@ describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
   let(:counter) { command_counter.new([], Mutex.new) }
 
   around do |example|
-    Delayed::Backend::Mongoid.batch_reserve = true
+    Delayed::Worker.batch_reserve = true
     example.run
   ensure
-    Delayed::Backend::Mongoid.reset_configuration!
     Delayed::Worker.reset
     # Not reset by Worker.reset:
     Delayed::Worker.exit_on_complete = false
@@ -87,8 +86,8 @@ describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
   end
 
   it 'is off by default' do
-    Delayed::Backend::Mongoid.batch_reserve = false
-    expect(Delayed::Backend::Mongoid.batch_reserve).to be false
+    Delayed::Worker.reset
+    expect(Delayed::Worker.batch_reserve).to be false
   end
 
   it 'locks a distinct job under each worker name' do
@@ -176,7 +175,7 @@ describe 'Batched reservation (Delayed::Backend::Mongoid.batch_reserve)' do
   end
 
   it 'reserves one job per worker when off' do
-    Delayed::Backend::Mongoid.batch_reserve = false
+    Delayed::Worker.batch_reserve = false
     enqueue(4)
     reserved = nil
     commands = commands_of { reserved = job_class.reserve_batch(workers) }

@@ -1,7 +1,6 @@
 require 'active_support/concern'
 require 'delayed_job'
 require 'mongoid'
-require 'delayed/backend/mongoid_configuration'
 
 module Delayed
   module Backend
@@ -69,12 +68,12 @@ module Delayed
             )
           end
 
-          # With batch_reserve and several workers: one bulk write of sorted
+          # With Delayed::Worker.batch_reserve and several workers: one bulk write of sorted
           # updateOnes, each atomically locking one job (so other processes
           # can't take it; a short batch means no jobs are left), then one
           # read-back of the locked jobs.
           def reserve_batch(workers, max_run_time = Worker.max_run_time)
-            return super unless Delayed::Backend::Mongoid.batch_reserve && workers.size > 1
+            return super unless Delayed::Worker.batch_reserve && workers.size > 1
 
             now = db_time_now
             claims = workers.map do |worker|

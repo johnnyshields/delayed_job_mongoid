@@ -7,10 +7,10 @@ describe Delayed::Backend::Mongoid::Job do
 
   context 'with batch_reserve (one bulk write per poll)' do
     around do |example|
-      Delayed::Backend::Mongoid.batch_reserve = true
+      Delayed::Worker.batch_reserve = true
       example.run
     ensure
-      Delayed::Backend::Mongoid.reset_configuration!
+      Delayed::Worker.reset
     end
 
     it_behaves_like 'a delayed_job backend running a dispatcher'

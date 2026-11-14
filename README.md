@@ -85,13 +85,16 @@ thread, then reading back the locked jobs. The server picks and locks each job
 atomically, so none is lost to other processes. Requires MongoDB Server 8.0+
 (sort on `updateOne`).
 
+Turn it on with delayed_job's `batch_reserve` setting; it batches whenever two
+or more threads are idle:
+
 ```ruby
 # in config/initializers/delayed_job.rb
-Delayed::Backend::Mongoid.configure do |config|
-  config.batch_reserve = true # batches whenever two or more threads are idle
-end
-# or: Delayed::Backend::Mongoid.batch_reserve = true
+Delayed::Worker.batch_reserve = true
 ```
+
+or `--batch-reserve` on the command line, or `BATCH_RESERVE=1` with
+`rake jobs:work`.
 
 Time to fill all threads of a worker process (median, local MongoDB 8.0, plus
 simulated network latency per round trip; measured with an earlier 3-round-trip
