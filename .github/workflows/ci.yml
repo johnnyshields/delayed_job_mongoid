@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ruby: ['3.2', '3.3', '3.4', '4.0', jruby-10.0, jruby-head, ruby-head]
+        ruby: ['3.2', '3.3', '3.4', '4.0', jruby-10.0, jruby-head, truffleruby, truffleruby-head, ruby-head]
         mongoid: ['7', '8', '9']
         # Batched reservation requires MongoDB 8.0+ (sort on updateOne)
         mongodb: ['8.0']
