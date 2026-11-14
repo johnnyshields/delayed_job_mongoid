@@ -110,7 +110,7 @@ module Delayed
           end
 
           def locked_jobs(worker_name)
-            where(locked_by: worker_name).to_a
+            on_primary(where(locked_by: worker_name)).to_a
           end
 
           # When a worker is exiting, make sure we don't have any locked jobs.
@@ -119,7 +119,7 @@ module Delayed
           end
 
           def locked_jobs_of(worker_names)
-            any_in(locked_by: worker_names).to_a
+            on_primary(any_in(locked_by: worker_names)).to_a
           end
 
           def clear_locks_of!(worker_names)
@@ -145,8 +145,15 @@ module Delayed
 
           # Older locks under these names (crash leftovers) are left for a later reserve.
           def claimed_jobs(workers, now)
-            claimed = where(locked_at: now).any_in(locked_by: workers.map(&:name)).index_by(&:locked_by)
+            claimed = on_primary(where(locked_at: now).any_in(locked_by: workers.map(&:name))).index_by(&:locked_by)
             workers.filter_map { |worker| (job = claimed[worker.name]) && [worker, job] }
+          end
+
+          # Reads the jobs just locked (claimed_jobs) or held by workers
+          # (locked_jobs, locked_jobs_of) from the primary, which took those
+          # writes: a secondary may not have them yet.
+          def on_primary(criteria)
+            criteria.read(mode: :primary)
           end
 
           # Mongo criteria matching all the jobs the worker can reserve.
