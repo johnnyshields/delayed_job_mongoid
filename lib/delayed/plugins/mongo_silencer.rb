@@ -12,14 +12,11 @@ module Delayed
     # (:loop wraps each reservation poll).
     class MongoSilencer < Delayed::Plugin
       callbacks do |lifecycle|
-        lifecycle.before(:execute) do |*_args|
-          store_log_level
-          silence!
-        end
-
-        lifecycle.before(:loop) do |*_args|
-          store_log_level
-          silence!
+        %i[execute loop].each do |event|
+          lifecycle.before(event) do |*_args|
+            store_log_level
+            silence!
+          end
         end
 
         # As of Delayed Job 4.10, the :perform hook includes the

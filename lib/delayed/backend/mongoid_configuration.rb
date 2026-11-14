@@ -12,7 +12,7 @@ module Delayed
       # or directly, e.g. Delayed::Backend::Mongoid.batch_reserve = true.
       class Configuration
         # Batched reservation (off by default): when several threads are
-        # idle, Job.reserve_batch reserves their jobs in 3 round trips
+        # idle, Job.reserve_batch reserves their jobs in 2 round trips
         # instead of one find_one_and_update per thread.
         attr_reader :batch_reserve
 
