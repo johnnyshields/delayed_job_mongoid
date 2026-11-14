@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/2.0.0/),
 - Support for Ruby 3.4 and 4.0.
 - Batched reservation (opt-in): `Delayed::Backend::Mongoid.configure { |config| config.batch_reserve = true }` (or `Delayed::Backend::Mongoid.batch_reserve = true`) reserves jobs for all idle threads in 2 round trips (sorted `updateOne`s in one bulk write; no job lost to other processes) instead of one per thread, whenever two or more threads are idle. Requires MongoDB Server 8.0+.
 - `Delayed::Job.silence_polling` silences the Mongo driver logger for `Delayed::Worker.silence_polling`.
+- `Delayed::Job.locked_jobs_of(names)` and `clear_locks_of!(names)` list and clear the locks of many workers in one query each, e.g. every thread and prefetch slot of a worker process that died.
 - Support for multi-threaded delayed_job workers (`Delayed::Dispatcher`): specs cover `reserve_batch` and concurrent reservation against MongoDB.
 
 ### Changed

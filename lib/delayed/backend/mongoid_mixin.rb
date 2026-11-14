@@ -135,6 +135,17 @@ module Delayed
             where(locked_by: worker_name).update_all(locked_at: nil, locked_by: nil)
           end
 
+          # The jobs locked by any of the named workers, in one query: e.g.
+          # every thread and slot of a worker process that died.
+          def locked_jobs_of(worker_names)
+            any_in(locked_by: worker_names).to_a
+          end
+
+          # Clears the locks of all the named workers in one update.
+          def clear_locks_of!(worker_names)
+            any_in(locked_by: worker_names).update_all(locked_at: nil, locked_by: nil)
+          end
+
           # In a multi-process setup, this will be called at boot time
           # to close unnecessary database connections on the parent process.
           def before_fork
