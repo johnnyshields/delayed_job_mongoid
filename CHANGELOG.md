@@ -11,11 +11,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/2.0.0/),
 - `MongoSilencer` plugin to silence Delayed Job polling. ([#89], [@johnnyshields])
 - Support for Mongoid 8 and 9.
 - Support for Ruby 3.4 and 4.0.
+- Batched reservation (opt-in, with delayed_job's `Delayed::Worker.batch_reserve = true`, `--batch-reserve` or `BATCH_RESERVE=1`) reserves jobs for all idle threads in 2 round trips (sorted `updateOne`s in one bulk write; no job lost to other processes) instead of one per thread, whenever two or more threads are idle. Requires MongoDB Server 8.0+.
+- `Delayed::Job.silence_logging` silences the Mongo driver logger for `Delayed::Worker.silence_logging`.
+- `Delayed::Job.locked_jobs` and `clear_locks!` take a worker name or an array of names, listing and clearing the locks of many workers in one query each, e.g. every thread and prefetch slot of a worker process that died.
+- Support for multi-threaded delayed_job workers (`Delayed::Dispatcher`): specs cover `reserve_batch` and concurrent reservation against MongoDB.
 
 ### Changed
 
 - Extract the backend into a mixin to enable better backend customization. ([#88], [@johnnyshields])
 - Optimize the job reservation query by combining two `$or` branches into one. ([#90], [@johnnyshields])
+
+### Fixed
+
+- `MongoSilencer` also silences the reservation queries of a multi-threaded worker, which run on the dispatcher thread, and no longer records an already silenced level as the original.
 
 ### Removed
 
