@@ -17,6 +17,8 @@ describe 'Reads from the primary' do
   ensure
     Mongoid.override_client(nil)
     Mongoid.clients.delete(:dj_secondary_reads)
+    # Close and forget the client too: other specs expect only the default.
+    [:dj_secondary_reads, 'dj_secondary_reads'].each { |name| Mongoid::Clients.clients.delete(name)&.close }
   end
 
   before do
